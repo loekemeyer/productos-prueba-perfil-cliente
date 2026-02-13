@@ -445,42 +445,13 @@ async function loadProductsFromDB() {
   const logged = !!currentSession;
 
   if (!logged) {
-    // Público: intenta RPC
-    const { data, error } = await supabaseClient.rpc('get_products_public_sorted', {
-      sort_mode: sortMode,
-    });
+  // Público: intenta RPC
+  const { data, error } = await supabaseClient.rpc('get_products_public_sorted', {
+  sort_mode: sortMode,
+  });
 
-    if (!error && Array.isArray(data) && data.length) {
-      products = data.map((p) => ({
-        id: p.id,
-        cod: p.cod,
-        category: p.category || 'Sin categoría',
-        subcategory: p.subcategory,
-        ranking: p.ranking == null || p.ranking === '' ? null : Number(p.ranking),
-        orden_catalogo: p.orden_catalogo == null || p.orden_catalogo === '' ? null : Number(p.orden_catalogo),
-        description: p.description,
-        list_price: p.list_price,
-        uxb: p.uxb,
-        images: Array.isArray(p.images) ? p.images : [],
-      }));
-      return;
-    }
-
-    // ✅ Fallback: consulta directa (requiere policy SELECT para anon)
-    if (error) console.warn('Public RPC failed, fallback to direct select:', error);
-
-    const { data: rows, error: err2 } = await supabaseClient
-      .from('products')
-      .select('id,cod,category,subcategory,ranking,orden_catalogo,description,list_price,uxb,images')
-      .eq('active', true);
-
-    if (err2) {
-      console.error('Public select failed:', err2);
-      products = [];
-      return;
-    }
-
-    products = (rows || []).map((p) => ({
+  if (!error && Array.isArray(data) && data.length) {
+    products = data.map((p) => ({
       id: p.id,
       cod: p.cod,
       category: p.category || 'Sin categoría',
@@ -492,9 +463,38 @@ async function loadProductsFromDB() {
       uxb: p.uxb,
       images: Array.isArray(p.images) ? p.images : [],
     }));
-
     return;
   }
+
+  // ✅ Fallback: consulta directa (requiere policy SELECT para anon)
+  if (error) console.warn('Public RPC failed, fallback to direct select:', error);
+
+  const { data: rows, error: err2 } = await supabaseClient
+    .from('products')
+    .select('id,cod,category,subcategory,ranking,orden_catalogo,description,list_price,uxb,images')
+    .eq('active', true);
+
+  if (err2) {
+    console.error('Public select failed:', err2);
+    products = [];
+    return;
+  }
+
+  products = (rows || []).map((p) => ({
+    id: p.id,
+    cod: p.cod,
+    category: p.category || 'Sin categoría',
+    subcategory: p.subcategory,
+    ranking: p.ranking == null || p.ranking === '' ? null : Number(p.ranking),
+    orden_catalogo: p.orden_catalogo == null || p.orden_catalogo === '' ? null : Number(p.orden_catalogo),
+    description: p.description,
+    list_price: p.list_price,
+    uxb: p.uxb,
+    images: Array.isArray(p.images) ? p.images : [],
+  }));
+
+  return;
+}
 
   // ✅ LOGUEADO: orden también según sortMode (para que no “parezca” que no ordena)
   let q = supabaseClient
@@ -506,15 +506,16 @@ async function loadProductsFromDB() {
 
   if (sortMode === 'bestsellers') {
     q = q.order('ranking', { ascending: true, nullsFirst: false });
-  } else if (sortMode === 'price_desc') {
-    q = q.order('category', { ascending: true });
-    q = q.order('list_price', { ascending: false, nullsFirst: false });
-    q = q.order('orden_catalogo', { ascending: true, nullsFirst: false });
-  } else if (sortMode === 'price_asc') {
-    q = q.order('category', { ascending: true });
-    q = q.order('list_price', { ascending: true, nullsFirst: false });
-    q = q.order('orden_catalogo', { ascending: true, nullsFirst: false });
-  } else {
+ } else if (sortMode === 'price_desc') {
+  q = q.order('category', { ascending: true });
+  q = q.order('list_price', { ascending: false, nullsFirst: false });
+  q = q.order('orden_catalogo', { ascending: true, nullsFirst: false });
+} else if (sortMode === 'price_asc') {
+  q = q.order('category', { ascending: true });
+  q = q.order('list_price', { ascending: true, nullsFirst: false });
+  q = q.order('orden_catalogo', { ascending: true, nullsFirst: false });
+}
+ else {
     // category (como lo tenías)
     q = q.order('category', { ascending: true });
     q = q.order('orden_catalogo', { ascending: true, nullsFirst: false });
@@ -825,67 +826,71 @@ function waLink(msg) {
   return `https://wa.me/5491131181021?text=${text}`;
 }
 
-/**
- * ✅ Repetir pedido: carga items al carrito
- */
-async function repeatOrder(orderId) {
-  try {
-    if (!currentSession || !customerProfile?.id) {
-      openLogin();
-      return;
-    }
-    if (!orderId) return;
+async function loadMyOrdersUI(limit = 3, targetId = 'myOrdersRecentBox', showMoreButton = true) {
+  const box = $(targetId);
+  if (!box) return;
 
-    setOrderStatus('Cargando pedido…', '');
-
-    // Traer items del pedido
-    const { data: items, error } = await supabaseClient
-      .from('order_items')
-      .select('product_id,cajas')
-      .eq('order_id', orderId);
-
-    if (error) {
-      console.error('repeatOrder items error:', error);
-      setOrderStatus('No se pudieron cargar los renglones del pedido.', 'err');
-      return;
-    }
-
-    const rows = items || [];
-    if (!rows.length) {
-      setOrderStatus('Este pedido no tiene renglones para repetir.', 'err');
-      return;
-    }
-
-    // Asegurar productos cargados (para uxb / render correcto)
-    if (!products || !products.length) {
-      await loadProductsFromDB();
-    }
-
-    // Vaciar carrito y cargar cajas por product_id
-    cart.splice(0, cart.length);
-
-    rows.forEach((r) => {
-      const pid = String(r.product_id || '').trim();
-      const cajas = Math.max(0, parseInt(r.cajas, 10) || 0);
-      if (!pid || !cajas) return;
-
-      cart.push({ productId: pid, qtyCajas: cajas });
-    });
-
-    // Render / UI
-    renderProducts();
-    updateCart();
-
-    showSection('carrito');
-    setOrderStatus('Pedido repetido: revisá el carrito y confirmá.', 'ok');
-  } catch (e) {
-    console.error('repeatOrder error:', e);
-    setOrderStatus('Error al repetir pedido.', 'err');
+  if (!currentSession || !customerProfile?.id) {
+    box.innerHTML = 'Iniciá sesión para ver tus pedidos.';
+    return;
   }
-}
-window.repeatOrder = repeatOrder;
 
-async function loadMyOrdersUI() {
+  box.innerHTML = 'Cargando…';
+
+  const { data, error } = await supabaseClient
+    .from('orders')
+    .select('id,created_at,status,total,payment_method')
+    .eq('customer_id', customerProfile.id)
+    .order('created_at', { ascending: false })
+    .limit(Math.max(1, Number(limit) || 3));
+
+  if (error) {
+    box.innerHTML = 'No se pudieron cargar los pedidos.';
+    return;
+  }
+
+  const rows = (data || []);
+  if (!rows.length) {
+    box.innerHTML = 'Todavía no tenés pedidos.';
+    return;
+  }
+
+  box.innerHTML = `
+    <div style="display:grid; gap:10px;">
+      ${rows
+        .map(
+          (o) => `
+            <div class="order-card">
+              <div class="order-row">
+                <div><strong>N°:</strong> ${String(o.id).slice(0, 8).toUpperCase()}</div>
+                <div><strong>Fecha:</strong> ${
+                  o.created_at ? new Date(o.created_at).toLocaleString('es-AR') : '—'
+                }</div>
+              </div>
+
+              <div class="order-row">
+                <div><strong>Estado:</strong> ${o.status || '—'}</div>
+                <div><strong>Total:</strong> $${formatMoney(o.total)}</div>
+              </div>
+
+              <div style="display:flex; justify-content:flex-end; margin-top:8px;">
+                <button type="button" class="order-repeat" onclick="repeatOrder('${o.id}')">
+                  Repetir pedido
+                </button>
+              </div>
+            </div>
+          `
+        )
+        .join('')}
+    </div>
+  `;
+
+  // (El botón "Ver más" vive en HTML; acá sólo lo ocultamos si no hace falta)
+  const moreBtn = $('btnOrdersMore');
+  if (moreBtn) moreBtn.style.display = showMoreButton ? 'inline-flex' : 'none';
+}
+
+async function loadMyOrdersFullUI() {
   const box = $('myOrdersBox');
   if (!box) return;
 
@@ -901,7 +906,7 @@ async function loadMyOrdersUI() {
     .select('id,created_at,status,total,payment_method')
     .eq('customer_id', customerProfile.id)
     .order('created_at', { ascending: false })
-    .limit(30);
+    .limit(50);
 
   if (error) {
     box.innerHTML = 'No se pudieron cargar los pedidos.';
@@ -915,24 +920,32 @@ async function loadMyOrdersUI() {
   }
 
   box.innerHTML = `
-    <div style="display:grid; gap:8px;">
-      ${rows.map(o => `
-        <div style="border:1px solid #eee; border-radius:10px; padding:10px;">
-          <div><strong>N°:</strong> ${String(o.id).slice(0,8).toUpperCase()}</div>
-          <div><strong>Fecha:</strong> ${o.created_at ? new Date(o.created_at).toLocaleString('es-AR') : '—'}</div>
-          <div><strong>Estado:</strong> ${o.status || '—'}</div>
-          <div><strong>Pago:</strong> ${o.payment_method || '—'}</div>
-          <div><strong>Total:</strong> $${formatMoney(o.total)}</div>
+    <div style="display:grid; gap:10px;">
+      ${rows
+        .map(
+          (o) => `
+            <div class="order-card">
+              <div class="order-row">
+                <div><strong>N°:</strong> ${String(o.id).slice(0, 8).toUpperCase()}</div>
+                <div><strong>Fecha:</strong> ${
+                  o.created_at ? new Date(o.created_at).toLocaleString('es-AR') : '—'
+                }</div>
+              </div>
 
-          <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
-            <button type="button"
-              style="padding:10px 12px; border-radius:10px; border:1px solid #ddd; background:#fff; cursor:pointer;"
-              onclick="repeatOrder('${String(o.id)}')">
-              Repetir pedido
-            </button>
-          </div>
-        </div>
-      `).join('')}
+              <div class="order-row">
+                <div><strong>Estado:</strong> ${o.status || '—'}</div>
+                <div><strong>Total:</strong> $${formatMoney(o.total)}</div>
+              </div>
+
+              <div style="display:flex; justify-content:flex-end; margin-top:8px;">
+                <button type="button" class="order-repeat" onclick="repeatOrder('${o.id}')">
+                  Repetir pedido
+                </button>
+              </div>
+            </div>
+          `
+        )
+        .join('')}
     </div>
   `;
 }
@@ -976,13 +989,8 @@ async function loadMyAddressesUI() {
   `;
 }
 
-/**
- * ✅ Cambiar contraseña con verificación de contraseña actual
- * Requiere input #currentPass en tu HTML.
- */
 async function changePasswordUI() {
   const s = $('passStatus');
-  const curr = ($('currentPass')?.value || '').trim(); // ✅ nuevo
   const p1 = ($('newPass1')?.value || '').trim();
   const p2 = ($('newPass2')?.value || '').trim();
 
@@ -1004,33 +1012,6 @@ async function changePasswordUI() {
     return;
   }
 
-  // ✅ Verificar contraseña actual (si existe el input)
-  if ($('currentPass')) {
-    if (!curr) {
-      s.textContent = 'Ingresá tu contraseña actual.';
-      return;
-    }
-
-    const email = currentSession?.user?.email;
-    if (!email) {
-      s.textContent = 'No se encontró el email de la sesión.';
-      return;
-    }
-
-    const { error: reauthErr } = await supabaseClient.auth.signInWithPassword({
-      email,
-      password: curr,
-    });
-
-    if (reauthErr) {
-      s.textContent = 'La contraseña actual es incorrecta.';
-      return;
-    }
-  } else {
-    // Fallback: sin verificación (te avisa)
-    console.warn('No existe #currentPass en el HTML. Cambio sin verificación previa.');
-  }
-
   const { error } = await supabaseClient.auth.updateUser({ password: p1 });
 
   if (error) {
@@ -1039,19 +1020,137 @@ async function changePasswordUI() {
   }
 
   s.textContent = 'Contraseña actualizada.';
-  if ($('currentPass')) $('currentPass').value = '';
   if ($('newPass1')) $('newPass1').value = '';
   if ($('newPass2')) $('newPass2').value = '';
 }
 
+
+/***********************
+ * PERFIL: MODALES + ACCORDIONS + REPETIR PEDIDO
+ ***********************/
+function openPassModal() {
+  const m = $('passModal');
+  if (!m) return;
+  m.classList.add('open');
+  m.setAttribute('aria-hidden', 'false');
+  const st = $('passStatus');
+  if (st) st.textContent = '';
+  if ($('newPass1')) $('newPass1').value = '';
+  if ($('newPass2')) $('newPass2').value = '';
+}
+
+function closePassModal() {
+  const m = $('passModal');
+  if (!m) return;
+  m.classList.remove('open');
+  m.setAttribute('aria-hidden', 'true');
+}
+
+function openOrdersModal() {
+  const m = $('ordersModal');
+  if (!m) return;
+  m.classList.add('open');
+  m.setAttribute('aria-hidden', 'false');
+  loadMyOrdersFullUI();
+}
+
+function closeOrdersModal() {
+  const m = $('ordersModal');
+  if (!m) return;
+  m.classList.remove('open');
+  m.setAttribute('aria-hidden', 'true');
+}
+
+window.openPassModal = openPassModal;
+window.closePassModal = closePassModal;
+window.openOrdersModal = openOrdersModal;
+window.closeOrdersModal = closeOrdersModal;
+
+function initProfileAccordions() {
+  document.querySelectorAll('.profile-acc-head').forEach((btn) => {
+    if (btn.__accInit) return;
+    btn.__accInit = true;
+
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.acc;
+      const body = document.getElementById('accBody_' + key);
+      if (!body) return;
+
+      const expanded = btn.getAttribute('aria-expanded') === 'true';
+      btn.setAttribute('aria-expanded', String(!expanded));
+
+      if (expanded) body.setAttribute('hidden', '');
+      else body.removeAttribute('hidden');
+    });
+  });
+}
+
+async function repeatOrder(orderId) {
+  try {
+    if (!currentSession) { openLogin(); return; }
+    if (!orderId) return;
+
+    setOrderStatus('Cargando pedido para repetir…');
+
+    const { data, error } = await supabaseClient
+      .from('order_items')
+      .select('product_id,cajas')
+      .eq('order_id', orderId);
+
+    if (error) {
+      setOrderStatus('No se pudo repetir el pedido (items).', 'err');
+      return;
+    }
+
+    const rows = (data || []);
+    if (!rows.length) {
+      setOrderStatus('Ese pedido no tiene renglones.', 'err');
+      return;
+    }
+
+    // Reemplaza el carrito actual
+    cart.splice(0, cart.length);
+
+    rows.forEach((r) => {
+      const pid = String(r.product_id);
+      const cajas = Math.max(0, Number(r.cajas || 0));
+      if (!pid || cajas <= 0) return;
+      cart.push({ productId: pid, qtyCajas: cajas });
+    });
+
+    // Asegurar productos cargados
+    if (!products || !products.length) await loadProductsFromDB();
+
+    renderProducts();
+    updateCart();
+
+    closeOrdersModal();
+    showSection('carrito');
+    setOrderStatus('Pedido cargado en el carrito. Revisalo y confirmá.', 'ok');
+  } catch (e) {
+    console.error('repeatOrder error:', e);
+    setOrderStatus('No se pudo repetir el pedido.', 'err');
+  }
+}
+window.repeatOrder = repeatOrder;
+
+
 async function openProfile() {
   if (!currentSession) { openLogin(); return; }
   showSection('perfil');
-  await loadMyOrdersUI();
-  await loadMyAddressesUI();
 
-  // (si tus accordions necesitan init)
-  try { initProfileAccordions?.(); } catch {}
+  // Datos perfil (arriba)
+  if ($('pf_business')) $('pf_business').innerText = (customerProfile?.business_name || '—').trim() || '—';
+  if ($('pf_codcliente')) $('pf_codcliente').innerText = (customerProfile?.cod_cliente || '—').trim() || '—';
+  if ($('pf_cuit')) $('pf_cuit').innerText = (customerProfile?.cuit || '—').trim() || '—';
+  if ($('pf_mail')) $('pf_mail').innerText = (customerProfile?.mail || '—').trim() || '—';
+  if ($('pf_dto')) $('pf_dto').innerText = ((Number(customerProfile?.dto_vol || 0) * 100).toFixed(1).replace('.', ',') + '%');
+
+  initProfileAccordions();
+
+  // Contenidos (por defecto NO desplegados, pero dejamos precargado)
+  await loadMyOrdersUI(3, 'myOrdersRecentBox', true);
+  await loadMyAddressesUI();
 }
 window.openProfile = openProfile;
 
@@ -1211,18 +1310,21 @@ function renderProducts() {
     `;
   };
 
-  // ✅ SOLO bestsellers en grilla global
-  if (sortMode === 'bestsellers') {
-    let items = [...list];
-    items.sort(getSortComparator());
+   // ✅ SOLO bestsellers en grilla global (opcional)
+if (sortMode === 'bestsellers') {
+  let items = [...list];
+  items.sort(getSortComparator());
 
-    container.innerHTML = `
-      <div class="products-grid">
-        ${items.map(buildCard).join('')}
-      </div>
-    `;
-    return;
-  }
+  container.innerHTML = `
+    <div class="products-grid">
+      ${items.map(buildCard).join('')}
+    </div>
+  `;
+  return;
+}
+
+// ✅ Para price_asc / price_desc: NO global.
+// Sigue el render por categorías (más abajo) y ordena dentro de cada categoría.
 
   // ✅ Modo category (bloques por categoría)
   const cats = getOrderedCategoriesFrom(list);
@@ -1237,7 +1339,7 @@ function renderProducts() {
       (p) => String(p.category || '').trim() === String(category).trim()
     );
 
-    // ordenar dentro de cada categoría (respeta sortMode)
+    // category: ordenar dentro de cada categoría
     items = items.sort(getSortComparator());
 
     if (!items.length) return;
@@ -1834,15 +1936,9 @@ async function openMyOrders() {
 window.openMyOrders = openMyOrders;
 
 function openChangePassword() {
-  // ✅ abre perfil + despliega accordion de password si existe
+  if (!currentSession) { openLogin(); return; }
+  openPassModal();
   closeUserMenu();
-  openProfile().then(() => {
-    const btn = document.querySelector('.profile-acc-head[data-acc="pass"]');
-    if (btn) {
-      const expanded = btn.getAttribute('aria-expanded') === 'true';
-      if (!expanded) btn.click();
-    }
-  });
 }
 window.openChangePassword = openChangePassword;
 
@@ -2003,7 +2099,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     window.open(waLink(msg), '_blank', 'noopener');
   });
 
-  $('btnChangePass')?.addEventListener('click', () => changePasswordUI());
+  $('btnOpenPassModal')?.addEventListener('click', () => openPassModal());
+  $('btnSavePass')?.addEventListener('click', () => changePasswordUI());
+  $('btnOrdersMore')?.addEventListener('click', () => openOrdersModal());
 
   // Entregas
   const shipSel = $('shippingSelect');
@@ -2094,23 +2192,5 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     syncPaymentButtons();
   });
-
-  // init accordions (si aplica)
-  try { initProfileAccordions?.(); } catch {}
 });
 
-function initProfileAccordions() {
-  document.querySelectorAll('.profile-acc-head').forEach((btn) => {
-    btn.addEventListener('click', () => {
-      const key = btn.dataset.acc;
-      const body = document.getElementById('accBody_' + key);
-      if (!body) return;
-
-      const expanded = btn.getAttribute('aria-expanded') === 'true';
-      btn.setAttribute('aria-expanded', String(!expanded));
-
-      if (expanded) body.setAttribute('hidden', '');
-      else body.removeAttribute('hidden');
-    });
-  });
-}
