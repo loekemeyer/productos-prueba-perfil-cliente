@@ -156,59 +156,124 @@
     </section>
 
    <!-- PERFIL -->
+
 <section id="perfil" class="section">
-  <h2 class="section-title">Mi perfil</h2>
+  <div class="profile-wrap">
 
-  <div class="profile-wrap profile-wide">
+    <div class="profile-card">
+      <div class="profile-header">
+        <h2>Mi Perfil</h2>
+      </div>
 
-    <!-- MIS PEDIDOS (DROPDOWN) -->
-    <div class="profile-card profile-accordion">
+      <div class="profile-grid">
+        <div class="profile-row">
+          <div class="profile-field">
+            <div class="label">Razón Social</div>
+            <div class="value" id="pf_business">—</div>
+          </div>
+          <div class="profile-field">
+            <div class="label">Cod. Cliente</div>
+            <div class="value" id="pf_codcliente">—</div>
+          </div>
+        </div>
+
+        <div class="profile-row">
+          <div class="profile-field">
+            <div class="label">CUIT</div>
+            <div class="value" id="pf_cuit">—</div>
+          </div>
+          <div class="profile-field">
+            <div class="label">Correo</div>
+            <div class="value" id="pf_mail">—</div>
+          </div>
+        </div>
+
+        <div class="profile-row">
+          <div class="profile-field">
+            <div class="label">Dto x Volumen</div>
+            <div class="value" id="pf_dto">—</div>
+          </div>
+          <div class="profile-field">
+            <div class="label">Contraseña</div>
+            <div class="value">
+              <button type="button" class="btn-outline" id="btnOpenPassModal">Modificar</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- HISTORIAL PEDIDOS (accordion) -->
+    <div class="profile-acc">
       <button type="button" class="profile-acc-head" data-acc="orders" aria-expanded="false">
-        <span class="profile-acc-title">Mis pedidos</span>
-        <span class="profile-acc-caret">▾</span>
+        <span>Historial de pedidos</span>
+        <span class="acc-icon">▾</span>
       </button>
+
       <div class="profile-acc-body" id="accBody_orders" hidden>
-        <div id="myOrdersBox" class="profile-box">Cargando…</div>
+        <div id="myOrdersRecentBox">Cargando…</div>
+
+        <div style="display:flex; justify-content:flex-end; margin-top:10px;">
+          <button type="button" class="btn-outline" id="btnOrdersMore">Ver más</button>
+        </div>
       </div>
     </div>
 
-    <!-- SUCURSALES (DROPDOWN) -->
-    <div class="profile-card profile-accordion">
+    <!-- SUCURSALES (accordion) -->
+    <div class="profile-acc">
       <button type="button" class="profile-acc-head" data-acc="addresses" aria-expanded="false">
-        <span class="profile-acc-title">Sucursales de entrega</span>
-        <span class="profile-acc-caret">▾</span>
+        <span>Sucursales</span>
+        <span class="acc-icon">▾</span>
       </button>
+
       <div class="profile-acc-body" id="accBody_addresses" hidden>
-        <div id="myAddressesBox" class="profile-box">Cargando…</div>
-        <button type="button" class="profile-btn" id="btnAddAddress">Quiero agregar una sucursal</button>
+        <div id="myAddressesBox">Cargando…</div>
+
+        <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:10px;">
+          <button type="button" class="btn-outline" id="btnAddAddress">Agregar sucursal</button>
+          <button type="button" class="btn-outline" id="btnReportError">Avisar error</button>
+        </div>
       </div>
-    </div>
-
-    <!-- MODIFICAR CONTRASEÑA -->
-    <div class="profile-card">
-      <div class="profile-card-title">Modificar contraseña</div>
-      <div class="profile-form">
-        <!-- ✅ NUEVO: contraseña actual obligatoria -->
-        <input id="currentPassConfirm" type="password" placeholder="Contraseña actual (obligatoria)" />
-
-        <input id="newPass1" type="password" placeholder="Nueva contraseña" />
-        <input id="newPass2" type="password" placeholder="Repetir nueva contraseña" />
-        <button type="button" class="profile-btn" id="btnChangePass">Guardar contraseña</button>
-      </div>
-      <div id="passStatus" class="profile-status" aria-live="polite"></div>
-    </div>
-
-    <!-- SOPORTE -->
-    <div class="profile-card">
-      <div class="profile-card-title">Soporte</div>
-      <button type="button" class="profile-btn danger" id="btnReportError">Avisar que hay un error</button>
     </div>
 
   </div>
+
+  <!-- MODAL: Cambiar contraseña -->
+  <div class="modal" id="passModal" aria-hidden="true">
+    <div class="modal-backdrop" onclick="closePassModal()"></div>
+    <div class="modal-content">
+      <div class="modal-head">
+        <div class="modal-title">Cambiar contraseña</div>
+        <button class="modal-x" type="button" onclick="closePassModal()">×</button>
+      </div>
+
+      <div class="modal-body">
+        <div style="display:grid; gap:10px;">
+          <input id="newPass1" type="password" placeholder="Nueva contraseña (mín. 6 caracteres)" />
+          <input id="newPass2" type="password" placeholder="Repetir nueva contraseña" />
+          <div id="passStatus" style="font-size:13px; color:#444;"></div>
+          <button type="button" class="primary-btn" id="btnSavePass">Guardar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL: Historial completo de pedidos -->
+  <div class="modal" id="ordersModal" aria-hidden="true">
+    <div class="modal-backdrop" onclick="closeOrdersModal()"></div>
+    <div class="modal-content wide">
+      <div class="modal-head">
+        <div class="modal-title">Historial completo de pedidos</div>
+        <button class="modal-x" type="button" onclick="closeOrdersModal()">×</button>
+      </div>
+
+      <div class="modal-body">
+        <div id="myOrdersBox">Cargando…</div>
+      </div>
+    </div>
+  </div>
 </section>
-
-
-    <!-- CARRITO -->
+<!-- CARRITO -->
     <section id="carrito" class="section">
       <h2 class="section-title">Pedido · Total: $<span id="pedidoTotalHeader">0</span></h2>
 
