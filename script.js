@@ -445,13 +445,42 @@ async function loadProductsFromDB() {
   const logged = !!currentSession;
 
   if (!logged) {
-  // Público: intenta RPC
-  const { data, error } = await supabaseClient.rpc('get_products_public_sorted', {
-  sort_mode: sortMode,
-  });
+    // Público: intenta RPC
+    const { data, error } = await supabaseClient.rpc('get_products_public_sorted', {
+      sort_mode: sortMode,
+    });
 
-  if (!error && Array.isArray(data) && data.length) {
-    products = data.map((p) => ({
+    if (!error && Array.isArray(data) && data.length) {
+      products = data.map((p) => ({
+        id: p.id,
+        cod: p.cod,
+        category: p.category || 'Sin categoría',
+        subcategory: p.subcategory,
+        ranking: p.ranking == null || p.ranking === '' ? null : Number(p.ranking),
+        orden_catalogo: p.orden_catalogo == null || p.orden_catalogo === '' ? null : Number(p.orden_catalogo),
+        description: p.description,
+        list_price: p.list_price,
+        uxb: p.uxb,
+        images: Array.isArray(p.images) ? p.images : [],
+      }));
+      return;
+    }
+
+    // ✅ Fallback: consulta directa (requiere policy SELECT para anon)
+    if (error) console.warn('Public RPC failed, fallback to direct select:', error);
+
+    const { data: rows, error: err2 } = await supabaseClient
+      .from('products')
+      .select('id,cod,category,subcategory,ranking,orden_catalogo,description,list_price,uxb,images')
+      .eq('active', true);
+
+    if (err2) {
+      console.error('Public select failed:', err2);
+      products = [];
+      return;
+    }
+
+    products = (rows || []).map((p) => ({
       id: p.id,
       cod: p.cod,
       category: p.category || 'Sin categoría',
@@ -463,38 +492,9 @@ async function loadProductsFromDB() {
       uxb: p.uxb,
       images: Array.isArray(p.images) ? p.images : [],
     }));
+
     return;
   }
-
-  // ✅ Fallback: consulta directa (requiere policy SELECT para anon)
-  if (error) console.warn('Public RPC failed, fallback to direct select:', error);
-
-  const { data: rows, error: err2 } = await supabaseClient
-    .from('products')
-    .select('id,cod,category,subcategory,ranking,orden_catalogo,description,list_price,uxb,images')
-    .eq('active', true);
-
-  if (err2) {
-    console.error('Public select failed:', err2);
-    products = [];
-    return;
-  }
-
-  products = (rows || []).map((p) => ({
-    id: p.id,
-    cod: p.cod,
-    category: p.category || 'Sin categoría',
-    subcategory: p.subcategory,
-    ranking: p.ranking == null || p.ranking === '' ? null : Number(p.ranking),
-    orden_catalogo: p.orden_catalogo == null || p.orden_catalogo === '' ? null : Number(p.orden_catalogo),
-    description: p.description,
-    list_price: p.list_price,
-    uxb: p.uxb,
-    images: Array.isArray(p.images) ? p.images : [],
-  }));
-
-  return;
-}
 
   // ✅ LOGUEADO: orden también según sortMode (para que no “parezca” que no ordena)
   let q = supabaseClient
@@ -506,16 +506,15 @@ async function loadProductsFromDB() {
 
   if (sortMode === 'bestsellers') {
     q = q.order('ranking', { ascending: true, nullsFirst: false });
- } else if (sortMode === 'price_desc') {
-  q = q.order('category', { ascending: true });
-  q = q.order('list_price', { ascending: false, nullsFirst: false });
-  q = q.order('orden_catalogo', { ascending: true, nullsFirst: false });
-} else if (sortMode === 'price_asc') {
-  q = q.order('category', { ascending: true });
-  q = q.order('list_price', { ascending: true, nullsFirst: false });
-  q = q.order('orden_catalogo', { ascending: true, nullsFirst: false });
-}
- else {
+  } else if (sortMode === 'price_desc') {
+    q = q.order('category', { ascending: true });
+    q = q.order('list_price', { ascending: false, nullsFirst: false });
+    q = q.order('orden_catalogo', { ascending: true, nullsFirst: false });
+  } else if (sortMode === 'price_asc') {
+    q = q.order('category', { ascending: true });
+    q = q.order('list_price', { ascending: true, nullsFirst: false });
+    q = q.order('orden_catalogo', { ascending: true, nullsFirst: false });
+  } else {
     // category (como lo tenías)
     q = q.order('category', { ascending: true });
     q = q.order('orden_catalogo', { ascending: true, nullsFirst: false });
@@ -826,6 +825,66 @@ function waLink(msg) {
   return `https://wa.me/5491131181021?text=${text}`;
 }
 
+/**
+ * ✅ Repetir pedido: carga items al carrito
+ */
+async function repeatOrder(orderId) {
+  try {
+    if (!currentSession || !customerProfile?.id) {
+      openLogin();
+      return;
+    }
+    if (!orderId) return;
+
+    setOrderStatus('Cargando pedido…', '');
+
+    // Traer items del pedido
+    const { data: items, error } = await supabaseClient
+      .from('order_items')
+      .select('product_id,cajas')
+      .eq('order_id', orderId);
+
+    if (error) {
+      console.error('repeatOrder items error:', error);
+      setOrderStatus('No se pudieron cargar los renglones del pedido.', 'err');
+      return;
+    }
+
+    const rows = items || [];
+    if (!rows.length) {
+      setOrderStatus('Este pedido no tiene renglones para repetir.', 'err');
+      return;
+    }
+
+    // Asegurar productos cargados (para uxb / render correcto)
+    if (!products || !products.length) {
+      await loadProductsFromDB();
+    }
+
+    // Vaciar carrito y cargar cajas por product_id
+    cart.splice(0, cart.length);
+
+    rows.forEach((r) => {
+      const pid = String(r.product_id || '').trim();
+      const cajas = Math.max(0, parseInt(r.cajas, 10) || 0);
+      if (!pid || !cajas) return;
+
+      cart.push({ productId: pid, qtyCajas: cajas });
+    });
+
+    // Render / UI
+    renderProducts();
+    updateCart();
+
+    showSection('carrito');
+    setOrderStatus('Pedido repetido: revisá el carrito y confirmá.', 'ok');
+  } catch (e) {
+    console.error('repeatOrder error:', e);
+    setOrderStatus('Error al repetir pedido.', 'err');
+  }
+}
+window.repeatOrder = repeatOrder;
+
 async function loadMyOrdersUI() {
   const box = $('myOrdersBox');
   if (!box) return;
@@ -862,7 +921,16 @@ async function loadMyOrdersUI() {
           <div><strong>N°:</strong> ${String(o.id).slice(0,8).toUpperCase()}</div>
           <div><strong>Fecha:</strong> ${o.created_at ? new Date(o.created_at).toLocaleString('es-AR') : '—'}</div>
           <div><strong>Estado:</strong> ${o.status || '—'}</div>
+          <div><strong>Pago:</strong> ${o.payment_method || '—'}</div>
           <div><strong>Total:</strong> $${formatMoney(o.total)}</div>
+
+          <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+            <button type="button"
+              style="padding:10px 12px; border-radius:10px; border:1px solid #ddd; background:#fff; cursor:pointer;"
+              onclick="repeatOrder('${String(o.id)}')">
+              Repetir pedido
+            </button>
+          </div>
         </div>
       `).join('')}
     </div>
@@ -908,8 +976,13 @@ async function loadMyAddressesUI() {
   `;
 }
 
+/**
+ * ✅ Cambiar contraseña con verificación de contraseña actual
+ * Requiere input #currentPass en tu HTML.
+ */
 async function changePasswordUI() {
   const s = $('passStatus');
+  const curr = ($('currentPass')?.value || '').trim(); // ✅ nuevo
   const p1 = ($('newPass1')?.value || '').trim();
   const p2 = ($('newPass2')?.value || '').trim();
 
@@ -931,6 +1004,33 @@ async function changePasswordUI() {
     return;
   }
 
+  // ✅ Verificar contraseña actual (si existe el input)
+  if ($('currentPass')) {
+    if (!curr) {
+      s.textContent = 'Ingresá tu contraseña actual.';
+      return;
+    }
+
+    const email = currentSession?.user?.email;
+    if (!email) {
+      s.textContent = 'No se encontró el email de la sesión.';
+      return;
+    }
+
+    const { error: reauthErr } = await supabaseClient.auth.signInWithPassword({
+      email,
+      password: curr,
+    });
+
+    if (reauthErr) {
+      s.textContent = 'La contraseña actual es incorrecta.';
+      return;
+    }
+  } else {
+    // Fallback: sin verificación (te avisa)
+    console.warn('No existe #currentPass en el HTML. Cambio sin verificación previa.');
+  }
+
   const { error } = await supabaseClient.auth.updateUser({ password: p1 });
 
   if (error) {
@@ -939,6 +1039,7 @@ async function changePasswordUI() {
   }
 
   s.textContent = 'Contraseña actualizada.';
+  if ($('currentPass')) $('currentPass').value = '';
   if ($('newPass1')) $('newPass1').value = '';
   if ($('newPass2')) $('newPass2').value = '';
 }
@@ -948,6 +1049,9 @@ async function openProfile() {
   showSection('perfil');
   await loadMyOrdersUI();
   await loadMyAddressesUI();
+
+  // (si tus accordions necesitan init)
+  try { initProfileAccordions?.(); } catch {}
 }
 window.openProfile = openProfile;
 
@@ -1107,21 +1211,18 @@ function renderProducts() {
     `;
   };
 
-   // ✅ SOLO bestsellers en grilla global (opcional)
-if (sortMode === 'bestsellers') {
-  let items = [...list];
-  items.sort(getSortComparator());
+  // ✅ SOLO bestsellers en grilla global
+  if (sortMode === 'bestsellers') {
+    let items = [...list];
+    items.sort(getSortComparator());
 
-  container.innerHTML = `
-    <div class="products-grid">
-      ${items.map(buildCard).join('')}
-    </div>
-  `;
-  return;
-}
-
-// ✅ Para price_asc / price_desc: NO global.
-// Sigue el render por categorías (más abajo) y ordena dentro de cada categoría.
+    container.innerHTML = `
+      <div class="products-grid">
+        ${items.map(buildCard).join('')}
+      </div>
+    `;
+    return;
+  }
 
   // ✅ Modo category (bloques por categoría)
   const cats = getOrderedCategoriesFrom(list);
@@ -1136,7 +1237,7 @@ if (sortMode === 'bestsellers') {
       (p) => String(p.category || '').trim() === String(category).trim()
     );
 
-    // category: ordenar dentro de cada categoría
+    // ordenar dentro de cada categoría (respeta sortMode)
     items = items.sort(getSortComparator());
 
     if (!items.length) return;
@@ -1733,8 +1834,15 @@ async function openMyOrders() {
 window.openMyOrders = openMyOrders;
 
 function openChangePassword() {
-  setOrderStatus('Cambiar contraseña: lo configuramos después.', 'err');
+  // ✅ abre perfil + despliega accordion de password si existe
   closeUserMenu();
+  openProfile().then(() => {
+    const btn = document.querySelector('.profile-acc-head[data-acc="pass"]');
+    if (btn) {
+      const expanded = btn.getAttribute('aria-expanded') === 'true';
+      if (!expanded) btn.click();
+    }
+  });
 }
 window.openChangePassword = openChangePassword;
 
@@ -1986,4 +2094,23 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     syncPaymentButtons();
   });
+
+  // init accordions (si aplica)
+  try { initProfileAccordions?.(); } catch {}
 });
+
+function initProfileAccordions() {
+  document.querySelectorAll('.profile-acc-head').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.acc;
+      const body = document.getElementById('accBody_' + key);
+      if (!body) return;
+
+      const expanded = btn.getAttribute('aria-expanded') === 'true';
+      btn.setAttribute('aria-expanded', String(!expanded));
+
+      if (expanded) body.setAttribute('hidden', '');
+      else body.removeAttribute('hidden');
+    });
+  });
+}
