@@ -2315,3 +2315,9 @@ body {
   padding: 0 14px;
 }
 .order-repeat-btn:hover{ background:#f5f5f5; }
+
+
+/* Perfil: modal ancho (historial completo) */
+.modal .modal-content.wide{ max-width: 820px; }
+.order-repeat-btn:hover{ background:#f5f5f5; }
+
